@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI Voice Sales Agent — push-to-talk voice assistant powered by AI for booking appointments and qualifying leads.">
+    <title>AI Voice Sales Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <!-- Ambient background orbs -->
+    <div class="bg-orb bg-orb--1"></div>
+    <div class="bg-orb bg-orb--2"></div>
+    <div class="bg-orb bg-orb--3"></div>
+
+    <main id="app">
+
+        <!-- Header -->
+        <header id="header" class="header">
+            <div class="header__logo">
+                <div class="header__icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="header__title">Voice Agent</h1>
+                    <p class="header__subtitle">AI Sales Assistant</p>
+                </div>
+            </div>
+            <div id="connection-status" class="status-badge status-badge--online">
+                <span class="status-badge__dot"></span>
+                <span class="status-badge__text">Online</span>
+            </div>
+        </header>
+
+        <!-- Conversation area -->
+        <section id="conversation-container" class="conversation" aria-label="Conversation history">
+            <div id="conversation-messages" class="conversation__messages">
+                <!-- Welcome message -->
+                <div class="message message--system" id="welcome-message">
+                    <div class="message__avatar message__avatar--ai">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                        </svg>
+                    </div>
+                    <div class="message__content">
+                        <div class="message__bubble message__bubble--ai">
+                            <p>Hello! I'm your AI sales assistant. Click the microphone below and start speaking — I'll help you book appointments and answer your questions.</p>
+                        </div>
+                        <span class="message__time">Just now</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Status bar -->
+        <div id="status-bar" class="status-bar">
+            <div id="status-indicator" class="status-bar__indicator">
+                <div class="status-bar__pulse"></div>
+                <span id="status-text" class="status-bar__text">Ready to listen</span>
+            </div>
+            <div id="audio-visualizer" class="visualizer" aria-hidden="true">
+                <span class="visualizer__bar"></span>
+                <span class="visualizer__bar"></span>
+                <span class="visualizer__bar"></span>
+                <span class="visualizer__bar"></span>
+                <span class="visualizer__bar"></span>
+            </div>
+        </div>
+
+        <!-- Mic button -->
+        <div class="controls">
+            <button id="mic-button" class="mic-btn" aria-label="Start recording" type="button">
+                <div class="mic-btn__ring"></div>
+                <div class="mic-btn__inner">
+                    <!-- Mic icon (default) -->
+                    <svg id="mic-icon" class="mic-btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                    <!-- Stop icon (while recording) -->
+                    <svg id="stop-icon" class="mic-btn__icon mic-btn__icon--hidden" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                </div>
+            </button>
+            <p id="mic-label" class="controls__label">Tap to speak</p>
+        </div>
+
+    </main>
+
+    <!-- Unsupported browser overlay -->
+    <div id="unsupported-overlay" class="overlay overlay--hidden">
+        <div class="overlay__card">
+            <div class="overlay__icon">⚠️</div>
+            <h2>Browser Not Supported</h2>
+            <p>Your browser doesn't support the Web Speech API. Please try <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> for the best experience.</p>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
