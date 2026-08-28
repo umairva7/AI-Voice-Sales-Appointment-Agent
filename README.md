@@ -6,95 +6,189 @@ The project is being built as a practical learning project to explore **AI agent
 
 ---
 
-## Project Overview
+## Phase 1 — Push-to-Talk Voice Loop ✅
 
-The goal is to build an AI-powered sales/receptionist agent that can handle the initial interaction with a potential customer and automate the journey from conversation to appointment.
+The current implementation covers the complete Phase 1 prototype:
 
-### Example workflow
+```text
+You: 🎙️ "Hi, I want to book an appointment."
 
-Lead starts a conversation
-        ↓
-AI Voice Agent
-        ↓
-Understands intent
-        ↓
-Collects lead information
-        ↓
-Qualifies the lead
-        ↓
-Calculates lead score
-        ↓
-Creates/updates CRM contact
-        ↓
-Books appointment
-        ↓
-Updates sales pipeline
-        ↓
-Triggers follow-up automation
-        ↓
-Human handoff when required
+System:
+  You: Hi, I want to book an appointment.
+  AI:  Sure, I'd be happy to help. What day would you prefer?
+
+🔊 Browser speaks the response aloud.
+```
+
+### Architecture
+
+```text
+┌─────────────────────┐
+│   Browser UI        │
+│   🎙 Start Speaking │
+└──────────┬──────────┘
+           │ microphone
+           ▼
+┌─────────────────────┐
+│ Speech-to-Text      │
+│ Web Speech API      │
+└──────────┬──────────┘
+           │ text
+           ▼
+┌─────────────────────┐
+│ Backend (FastAPI)    │
+│ POST /api/chat      │
+│ → LLM / Fallback    │
+└──────────┬──────────┘
+           │ text
+           ▼
+┌─────────────────────┐
+│ Text-to-Speech      │
+│ SpeechSynthesis API │
+└──────────┬──────────┘
+           │ audio
+           ▼
+      🔊 User hears
+```
+
+### Stack
+
+| Part       | Technology                     | Why                          |
+| ---------- | ------------------------------ | ---------------------------- |
+| Frontend   | HTML + CSS + JavaScript        | Simple, no framework bloat   |
+| Microphone | Web Speech API                 | Built into browser           |
+| STT        | Web Speech API                 | Free                         |
+| Backend    | FastAPI + Python               | Matches existing skills      |
+| AI         | GitHub Models / OpenAI / Echo  | Configurable via `.env`      |
+| TTS        | Browser SpeechSynthesis API    | Free                         |
+| Hosting    | Localhost                      | $0                           |
+
+### Milestones Implemented
+
+- [x] 1️⃣ Browser microphone capture
+- [x] 2️⃣ Speech-to-text transcription in UI
+- [x] 3️⃣ FastAPI backend (`POST /api/chat`)
+- [x] 4️⃣ LLM integration (with scripted fallback)
+- [x] 5️⃣ Text-to-speech response
+- [x] 6️⃣ Conversation history/context
 
 ---
 
-## Key Features
+## Project Structure
 
-### Voice AI
+```
+voice-ai-agent/
+│
+├── backend/
+│   ├── main.py            # FastAPI server + LLM integration
+│   ├── requirements.txt   # Python dependencies
+│   └── .env               # LLM API keys (gitignored)
+│
+├── frontend/
+│   ├── index.html          # Voice agent UI
+│   ├── style.css           # Design system
+│   └── script.js           # STT + chat + TTS logic
+│
+├── .gitignore
+└── README.md
+```
 
-- Voice-based interaction through a browser
-- Speech-to-text processing
-- AI-generated responses
-- Text-to-speech responses
-- Conversation context and memory
+---
 
-### AI Agent
+## Quick Start
 
-- Intent detection
-- Lead qualification
-- Structured information extraction
-- Lead scoring
-- Tool calling
-- Business rules and system prompts
-- Human escalation when required
+### 1. Install dependencies
 
-### CRM Integration
+```bash
+cd voice-ai-agent
+python -m venv .venv
+source .venv/bin/activate          # Linux/Mac
+# .venv\Scripts\activate           # Windows
 
-Integration with **GoHighLevel** for:
+pip install -r backend/requirements.txt
+```
 
-- Creating contacts
-- Updating contacts
-- Creating opportunities
-- Updating pipeline stages
+### 2. (Optional) Configure an LLM
+
+Edit `backend/.env` and uncomment/fill in your keys:
+
+```env
+# GitHub Models (free with GitHub Student)
+LLM_PROVIDER=github
+LLM_API_KEY=your_github_token
+LLM_MODEL=gpt-4o-mini
+LLM_BASE_URL=https://models.inference.ai.azure.com
+```
+
+> **Without an LLM key**, the agent uses a built-in scripted fallback that simulates a sales conversation. The full voice loop still works.
+
+### 3. Run the server
+
+```bash
+uvicorn backend.main:app --reload --port 8000
+```
+
+### 4. Open in browser
+
+Navigate to **http://localhost:8000** in **Chrome** or **Edge** (required for Web Speech API).
+
+Click the microphone → speak → watch the transcript appear → hear the AI respond.
+
+---
+
+## API Reference
+
+### `GET /health`
+
+Health check. Returns `{ "status": "healthy", "llm_configured": true/false }`.
+
+### `POST /api/chat`
+
+Main chat endpoint.
+
+**Request:**
+```json
+{
+  "message": "I want to book an appointment",
+  "history": [
+    { "role": "user", "content": "Hi" },
+    { "role": "assistant", "content": "Hello! How can I help?" }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "reply": "I'd be happy to help you book an appointment! What day works best for you?"
+}
+```
+
+---
+
+## Future Phases
+
+### Phase 2 — Real-time Voice
+- Continuous audio streaming
+- WebSocket/WebRTC integration
+- Interruption handling & turn detection
+- Streaming STT → agent → streaming TTS
+
+### Phase 3 — CRM Integration
+- GoHighLevel API integration
+- Lead qualification & scoring
 - Appointment management
-- Workflow automation
 - Webhook event handling
 
-### Backend
-
-Built with **FastAPI** to handle:
-
-- Agent requests
-- CRM API communication
-- Webhooks
-- Business logic
-- Validation
-- Error handling
-- Database operations
-
-### Automation
-
-The system will automate actions such as:
-
-- Lead qualification
-- CRM updates
-- Appointment booking
-- Appointment reminders
+### Phase 4 — Automation
 - Follow-up sequences
+- Appointment reminders
 - Sales notifications
 - Human handoff
 
 ---
 
-# Architecture
+## Full Architecture (Target)
 
 ```text
                          ┌───────────────────┐
@@ -151,3 +245,4 @@ The system will automate actions such as:
           └────────┬─────────┘
                    ▼
                   Lead
+```
