@@ -218,7 +218,7 @@ async def serve_frontend() -> FileResponse:
 
 
 @app.get("/health", tags=["Health"])
-async def health_check() -> dict[str, str]:
+async def health_check() -> dict:
     """Health check endpoint."""
     return {
         "status": "healthy",
