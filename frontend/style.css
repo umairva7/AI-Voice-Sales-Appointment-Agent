@@ -1,5 +1,5 @@
 /* ============================================================
-   AI Voice Sales Agent — Phase 1 Design System
+   AI Voice Sales Agent — Phase 2 Design System
    ============================================================ */
 
 /* ----- Custom Properties ----- */
@@ -381,31 +381,6 @@ body {
     padding: 0 4px;
 }
 
-/* Speaking indicator on AI bubbles */
-.message__speaking {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 8px;
-    font-size: 0.72rem;
-    color: var(--accent-light);
-    opacity: 0;
-    transition: opacity var(--transition-fast);
-}
-
-.message__speaking.active {
-    opacity: 1;
-}
-
-.message__speaking svg {
-    width: 14px;
-    height: 14px;
-    animation: spin 1.5s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
 
 /* Typing indicator */
 .typing-indicator {

@@ -32,6 +32,7 @@
     // ── State ────────────────────────────────────────────────
     let isListening  = false;
     let isSpeaking   = false;
+    let isProcessing = false;
     let recognition  = null;
     const synth      = window.speechSynthesis;
 
@@ -82,8 +83,7 @@
                 }
             }
 
-            // Update the live transcript bubble
-            updateLiveTranscript(final_ || interim, !!final_);
+            updateLiveTranscript(final_ || interim);
 
             if (final_) {
                 finishUserTurn(final_.trim());
@@ -171,7 +171,7 @@
     // ── Live transcript (interim bubble) ─────────────────────
     let $liveBubble = null;
 
-    function updateLiveTranscript(text, isFinal) {
+    function updateLiveTranscript(text) {
         if (!$liveBubble) {
             $liveBubble = addMessage("user", text, { live: true });
         }
@@ -313,6 +313,10 @@
      * Called when the user finishes speaking (final transcript).
      */
     async function finishUserTurn(text) {
+        // Guard: prevent double-submission while still processing
+        if (isProcessing) return;
+        isProcessing = true;
+
         // Replace the live bubble with a permanent one
         removeLiveTranscript();
         addMessage("user", text);
@@ -329,7 +333,7 @@
                 sid = result.session_id;
             } else {
                 // ── HTTP fallback path ──────────────────────
-                const typingEl = addTypingIndicator();
+                addTypingIndicator();
                 const result = await sendToBackend(text);
                 removeTypingIndicator();
                 addMessage("ai", result.reply);
@@ -352,6 +356,7 @@
             console.error("Backend error:", err);
         }
 
+        isProcessing = false;
         setUIState("idle");
     }
 
@@ -408,6 +413,16 @@
             }
 
             let fullReply = "";
+            let settled = false;
+
+            // Timeout: reject if no stream_end within 30s
+            const timeout = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    ws.removeEventListener("message", handler);
+                    reject(new Error("Response timed out"));
+                }
+            }, 30000);
 
             const handler = (e) => {
                 let data;
@@ -423,6 +438,9 @@
                     fullReply += data.content;
                     updateStreamingMessage(fullReply);
                 } else if (data.type === "stream_end") {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
                     ws.removeEventListener("message", handler);
                     finalizeStreamingMessage(data.full_reply || fullReply);
                     resolve({
@@ -430,6 +448,9 @@
                         session_id: data.session_id || null,
                     });
                 } else if (data.type === "error") {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
                     ws.removeEventListener("message", handler);
                     removeStreamingMessage();
                     reject(new Error(data.message || "WebSocket error"));

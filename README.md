@@ -6,18 +6,25 @@ The project is being built as a practical learning project to explore **AI agent
 
 ---
 
-## Phase 1 — Push-to-Talk Voice Loop ✅
+## Phase 2 — Streaming Voice Agent ✅
 
-The current implementation covers the complete Phase 1 prototype:
+Upgrades the Phase 1 prototype into a structured voice AI agent with:
+
+- **WebSocket streaming** — real-time token-by-token responses via `WS /ws/chat`
+- **Conversation memory** — server-side session management with sliding window & TTL cleanup
+- **LLM service abstraction** — hot-swappable providers (Gemini / OpenAI / Groq / Ollama / scripted fallback)
+- **Streaming LLM responses** — Gemini `streamGenerateContent` SSE → live token delivery
+- **TTS abstraction** — swappable TTS layer (browser SpeechSynthesis now, Edge TTS ready)
+- **HTTP fallback** — frontend automatically falls back to `POST /api/chat` if WebSocket fails
 
 ```text
 You: 🎙️ "Hi, I want to book an appointment."
 
-System:
+System (streaming):
   You: Hi, I want to book an appointment.
-  AI:  Sure, I'd be happy to help. What day would you prefer?
+  AI:  S|u|r|e|,| |I|'|d| |b|e| |h|a|p|p|y| ... (tokens stream in real-time)
 
-🔊 Browser speaks the response aloud.
+🔊 Browser speaks the complete response aloud.
 ```
 
 ### Architecture
@@ -35,12 +42,13 @@ System:
 └──────────┬──────────┘
            │ text
            ▼
-┌─────────────────────┐
-│ Backend (FastAPI)    │
-│ POST /api/chat      │
-│ → LLM / Fallback    │
-└──────────┬──────────┘
-           │ text
+┌─────────────────────────────┐
+│ Backend (FastAPI)           │
+│ WS  /ws/chat  (streaming)  │◄── preferred
+│ POST /api/chat (fallback)  │◄── automatic fallback
+│ → LLM Service → Memory     │
+└──────────┬──────────────────┘
+           │ streamed tokens / text
            ▼
 ┌─────────────────────┐
 │ Text-to-Speech      │
@@ -53,41 +61,65 @@ System:
 
 ### Stack
 
-| Part       | Technology                     | Why                          |
-| ---------- | ------------------------------ | ---------------------------- |
-| Frontend   | HTML + CSS + JavaScript        | Simple, no framework bloat   |
-| Microphone | Web Speech API                 | Built into browser           |
-| STT        | Web Speech API                 | Free                         |
-| Backend    | FastAPI + Python               | Matches existing skills      |
-| AI         | GitHub Models / OpenAI / Echo  | Configurable via `.env`      |
-| TTS        | Browser SpeechSynthesis API    | Free                         |
-| Hosting    | Localhost                      | $0                           |
+| Part       | Technology                        | Why                          |
+| ---------- | --------------------------------- | ---------------------------- |
+| Frontend   | HTML + CSS + JavaScript           | Simple, no framework bloat   |
+| Microphone | Web Speech API                    | Built into browser           |
+| STT        | Web Speech API                    | Free                         |
+| Backend    | FastAPI + Python                  | Matches existing skills      |
+| Transport  | WebSocket (WS) + HTTP fallback    | Streaming + reliability      |
+| AI         | Gemini 2.5 Flash (configurable)   | Free tier, hot-swappable     |
+| Memory     | Server-side sessions              | Sliding window + TTL cleanup |
+| TTS        | Browser SpeechSynthesis / Edge    | Free, swappable              |
+| Hosting    | Localhost                         | $0                           |
 
 ### Milestones Implemented
 
 - [x] 1️⃣ Browser microphone capture
 - [x] 2️⃣ Speech-to-text transcription in UI
-- [x] 3️⃣ FastAPI backend (`POST /api/chat`)
-- [x] 4️⃣ LLM integration (with scripted fallback)
-- [x] 5️⃣ Text-to-speech response
-- [x] 6️⃣ Conversation history/context
+- [x] 3️⃣ FastAPI backend (`POST /api/chat` + `WS /ws/chat`)
+- [x] 4️⃣ LLM service abstraction (factory pattern, hot-swappable)
+- [x] 5️⃣ Streaming LLM responses (Gemini SSE)
+- [x] 6️⃣ Text-to-speech response
+- [x] 7️⃣ Server-side conversation memory (sessions, sliding window, TTL)
+- [x] 8️⃣ WebSocket communication with HTTP fallback
+- [x] 9️⃣ TTS service abstraction (browser + edge-tts ready)
 
 ---
 
 ## Project Structure
 
 ```
-voice-ai-agent/
+AI-voice-agent/
 │
 ├── backend/
-│   ├── main.py            # FastAPI server + LLM integration
-│   ├── requirements.txt   # Python dependencies
-│   └── .env               # LLM API keys (gitignored)
+│   ├── main.py              # FastAPI server + REST + WebSocket endpoints
+│   ├── requirements.txt     # Python dependencies
+│   ├── .env                 # LLM/TTS config (gitignored)
+│   ├── __init__.py
+│   │
+│   ├── llm/                 # LLM service layer
+│   │   ├── __init__.py      # Factory export
+│   │   ├── base.py          # Abstract LLMService interface
+│   │   ├── factory.py       # Provider selection from env vars
+│   │   ├── gemini.py        # Gemini provider (streaming + non-streaming)
+│   │   ├── openai_compat.py # OpenAI-compatible provider
+│   │   └── scripted.py      # Zero-cost scripted fallback
+│   │
+│   ├── memory/              # Conversation memory layer
+│   │   ├── __init__.py
+│   │   └── manager.py       # Session-based memory with sliding window
+│   │
+│   └── tts/                 # TTS service layer
+│       ├── __init__.py      # Factory export
+│       ├── base.py          # Abstract TTSService interface
+│       ├── browser.py       # Browser SpeechSynthesis (client-side)
+│       └── edge.py          # Edge TTS (free server-side, optional)
 │
 ├── frontend/
-│   ├── index.html          # Voice agent UI
-│   ├── style.css           # Design system
-│   └── script.js           # STT + chat + TTS logic
+│   ├── index.html           # Voice agent UI
+│   ├── style.css            # Design system
+│   └── script.js            # STT + WebSocket + HTTP fallback + TTS
 │
 ├── .gitignore
 └── README.md
@@ -100,7 +132,7 @@ voice-ai-agent/
 ### 1. Install dependencies
 
 ```bash
-cd voice-ai-agent
+cd AI-voice-agent
 python -m venv .venv
 source .venv/bin/activate          # Linux/Mac
 # .venv\Scripts\activate           # Windows
@@ -113,26 +145,41 @@ pip install -r backend/requirements.txt
 Edit `backend/.env` and uncomment/fill in your keys:
 
 ```env
+# Gemini (default — free tier)
+GEMINI_API_KEY=your_gemini_api_key
+LLM_MODEL=gemini-flash-latest
+
 # GitHub Models (free with GitHub Student)
-LLM_PROVIDER=github
-LLM_API_KEY=your_github_token
-LLM_MODEL=gpt-4o-mini
-LLM_BASE_URL=https://models.inference.ai.azure.com
+# LLM_PROVIDER=github
+# LLM_API_KEY=your_github_token
+# LLM_MODEL=gpt-4o-mini
+# LLM_BASE_URL=https://models.inference.ai.azure.com
 ```
 
 > **Without an LLM key**, the agent uses a built-in scripted fallback that simulates a sales conversation. The full voice loop still works.
 
-### 3. Run the server
+### 3. (Optional) Configure TTS
+
+```env
+# Default: browser SpeechSynthesis (no config needed)
+# TTS_PROVIDER=browser
+
+# Edge TTS (free, server-side, higher quality)
+# TTS_PROVIDER=edge
+# TTS_VOICE=en-US-AriaNeural
+```
+
+### 4. Run the server
 
 ```bash
 uvicorn backend.main:app --reload --port 8000
 ```
 
-### 4. Open in browser
+### 5. Open in browser
 
 Navigate to **http://localhost:8000** in **Chrome** or **Edge** (required for Web Speech API).
 
-Click the microphone → speak → watch the transcript appear → hear the AI respond.
+Click the microphone → speak → watch tokens stream in real-time → hear the AI respond.
 
 ---
 
@@ -140,39 +187,59 @@ Click the microphone → speak → watch the transcript appear → hear the AI r
 
 ### `GET /health`
 
-Health check. Returns `{ "status": "healthy", "llm_configured": true/false }`.
+Health check. Returns `{ "status": "healthy", "llm_provider": "...", "tts_provider": "...", "active_sessions": 0 }`.
 
 ### `POST /api/chat`
 
-Main chat endpoint.
+Main chat endpoint (HTTP, non-streaming).
 
 **Request:**
 ```json
 {
   "message": "I want to book an appointment",
-  "history": [
-    { "role": "user", "content": "Hi" },
-    { "role": "assistant", "content": "Hello! How can I help?" }
-  ]
+  "session_id": "abc123"
 }
 ```
 
 **Response:**
 ```json
 {
-  "reply": "I'd be happy to help you book an appointment! What day works best for you?"
+  "reply": "I'd be happy to help you book an appointment! What day works best for you?",
+  "session_id": "abc123"
 }
 ```
+
+### `WS /ws/chat`
+
+WebSocket endpoint for streaming chat.
+
+**Client sends:**
+```json
+{"type": "message", "message": "I want to book an appointment", "session_id": "abc123"}
+```
+
+**Server streams back:**
+```json
+{"type": "stream_start"}
+{"type": "token", "content": "I'd"}
+{"type": "token", "content": " be happy"}
+{"type": "token", "content": " to help..."}
+{"type": "stream_end", "full_reply": "I'd be happy to help...", "session_id": "abc123", "tts_mode": "browser"}
+```
+
+### Session Management
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/session` | POST | Create a new session |
+| `/api/session/{id}` | GET | Get session metadata |
+| `/api/session/{id}/history` | GET | Get conversation history |
+| `/api/session/{id}` | DELETE | Delete a session |
+| `/api/sessions` | GET | List all active sessions |
 
 ---
 
 ## Future Phases
-
-### Phase 2 — Real-time Voice
-- Continuous audio streaming
-- WebSocket/WebRTC integration
-- Interruption handling & turn detection
-- Streaming STT → agent → streaming TTS
 
 ### Phase 3 — CRM Integration
 - GoHighLevel API integration

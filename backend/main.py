@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -187,8 +187,7 @@ async def chat(request: MessageRequest) -> ChatResponse:
     try:
         reply = await llm_service.generate_response(message, context)
     except Exception as e:
-        print(f"[LLM Error] {e}")
-        # Fall back to scripted if the real provider fails
+        print(f"[LLM Error] {type(e).__name__}: {e}")
         from backend.llm.scripted import ScriptedService
         fallback = ScriptedService()
         reply = await fallback.generate_response(message, context)
@@ -196,10 +195,9 @@ async def chat(request: MessageRequest) -> ChatResponse:
     # ── 5. Record AI turn ────────────────────────────────────
     memory.add_turn(session_id, "assistant", reply)
 
-    print(
-        f"[Chat] Session {session_id}: "
-        f"{memory.get_session_info(session_id)['turn_count']} turns"
-    )
+    info = memory.get_session_info(session_id)
+    if info:
+        print(f"[Chat] Session {session_id}: {info['turn_count']} turns")
 
     return ChatResponse(reply=reply, session_id=session_id)
 
@@ -218,7 +216,6 @@ async def get_session(session_id: str) -> SessionResponse:
     """Get session metadata."""
     info = memory.get_session_info(session_id)
     if info is None:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Session not found")
     return SessionResponse(**info)
 
@@ -230,7 +227,6 @@ async def get_session_history(
 ) -> SessionHistoryResponse:
     """Get conversation history for a session."""
     if not memory.session_exists(session_id):
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Session not found")
 
     turns = memory.get_history(session_id, last_n=last_n)
@@ -283,15 +279,23 @@ async def ws_chat(websocket: WebSocket):
     try:
         while True:
             raw = await websocket.receive_text()
-            data = json.loads(raw)
 
-            if data.get("type") != "message":
+            # ── Parse incoming JSON ──────────────────────
+            try:
+                data = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
                 await websocket.send_json(
-                    {"type": "error", "message": "Unknown message type"}
+                    {"type": "error", "message": "Invalid JSON"}
                 )
                 continue
 
-            message = data.get("message", "").strip()
+            if not isinstance(data, dict) or data.get("type") != "message":
+                await websocket.send_json(
+                    {"type": "error", "message": "Expected {type: 'message', message: '...'}"}
+                )
+                continue
+
+            message = str(data.get("message", "")).strip()
             client_session_id = data.get("session_id")
 
             if not message:
@@ -326,8 +330,7 @@ async def ws_chat(websocket: WebSocket):
                         "content": token,
                     })
             except Exception as e:
-                print(f"[LLM Stream Error] {e}")
-                # Fall back to scripted if the real provider fails
+                print(f"[LLM Stream Error] {type(e).__name__}: {e}")
                 from backend.llm.scripted import ScriptedService
 
                 fallback = ScriptedService()
@@ -349,17 +352,16 @@ async def ws_chat(websocket: WebSocket):
                 "tts_mode": tts_mode,
             })
 
-            print(
-                f"[WS Chat] Session {session_id}: "
-                f"{memory.get_session_info(session_id)['turn_count']} turns"
-            )
+            info = memory.get_session_info(session_id)
+            if info:
+                print(f"[WS Chat] Session {session_id}: {info['turn_count']} turns")
 
     except WebSocketDisconnect:
         print("[WS] Client disconnected")
     except Exception as e:
-        print(f"[WS Error] {e}")
+        print(f"[WS Error] {type(e).__name__}: {e}")
         try:
-            await websocket.close(code=1011, reason=str(e))
+            await websocket.close(code=1011, reason="Internal server error")
         except Exception:
             pass
 

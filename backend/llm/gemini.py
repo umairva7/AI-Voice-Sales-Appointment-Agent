@@ -1,3 +1,14 @@
+"""
+Google Gemini provider.
+=======================
+Calls the Gemini REST API directly via httpx — no heavy SDK required.
+Supports both non-streaming (generateContent) and streaming (streamGenerateContent SSE).
+
+Env vars:
+    GEMINI_API_KEY   — your API key
+    LLM_MODEL        — model name (default: gemini-flash-latest)
+"""
+
 from __future__ import annotations
 
 import json as _json
