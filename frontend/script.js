@@ -1,13 +1,15 @@
 /* ============================================================
-   AI Voice Sales Agent — Phase 1 Client Logic
+   AI Voice Sales Agent — Phase 2 Client Logic
    ============================================================
    Milestones covered:
      1. Browser microphone (Web Speech API)
      2. Speech-to-text → transcript in UI
-     3. POST /api/chat → backend
+     3. POST /api/chat → backend (with session management)
      4. Display AI response
      5. Text-to-speech (SpeechSynthesis)
-     6. Conversation history
+     6. Server-side conversation memory (via session_id)
+     7. Session persistence across page reloads
+     8. New conversation / clear history controls
    ============================================================ */
 
 (function () {
@@ -23,6 +25,7 @@
     const $statusText     = document.getElementById("status-text");
     const $connBadge      = document.getElementById("connection-status");
     const $overlay        = document.getElementById("unsupported-overlay");
+    const $newChatBtn     = document.getElementById("new-chat-button");
 
     // ── State ────────────────────────────────────────────────
     let isListening  = false;
@@ -30,8 +33,10 @@
     let recognition  = null;
     const synth      = window.speechSynthesis;
 
-    // Conversation history sent to the backend for context
-    const conversationHistory = [];
+    // Session ID — persisted in sessionStorage so it survives page reloads
+    // but not browser restarts (intentional: fresh session on new visit)
+    const SESSION_KEY = "voice_agent_session_id";
+    let sessionId = sessionStorage.getItem(SESSION_KEY) || null;
 
     // ── Feature detection ────────────────────────────────────
     const SpeechRecognition =
@@ -241,20 +246,22 @@
         removeLiveTranscript();
         addMessage("user", text);
 
-        // Add to conversation history
-        conversationHistory.push({ role: "user", content: text });
-
-        // Send to backend
+        // Send to backend (server manages history now)
         setUIState("processing");
         const typingEl = addTypingIndicator();
 
         try {
-            const reply = await sendToBackend(text);
+            const { reply, session_id } = await sendToBackend(text);
             removeTypingIndicator();
+
+            // Persist the session ID for future requests
+            if (session_id) {
+                sessionId = session_id;
+                sessionStorage.setItem(SESSION_KEY, session_id);
+            }
 
             // Add AI message
             addMessage("ai", reply);
-            conversationHistory.push({ role: "assistant", content: reply });
 
             // Speak the response
             await speakText(reply);
@@ -268,7 +275,7 @@
     }
 
     /**
-     * POST /api/chat
+     * POST /api/chat — now sends session_id instead of full history
      */
     async function sendToBackend(message) {
         const res = await fetch("/api/chat", {
@@ -276,7 +283,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 message,
-                history: conversationHistory.slice(0, -1), // all except current msg
+                session_id: sessionId,
             }),
         });
 
@@ -285,7 +292,10 @@
         }
 
         const data = await res.json();
-        return data.reply || data.response || "No response from the agent.";
+        return {
+            reply: data.reply || "No response from the agent.",
+            session_id: data.session_id || null,
+        };
     }
 
     // ── Text-to-Speech ───────────────────────────────────────
@@ -359,6 +369,63 @@
         }
     });
 
+    // ── New Chat button handler ──────────────────────────────
+    if ($newChatBtn) {
+        $newChatBtn.addEventListener("click", async () => {
+            // Clear the UI
+            $messages.innerHTML = "";
+
+            // Delete the old session on the server (fire & forget)
+            if (sessionId) {
+                fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+            }
+
+            // Clear the stored session
+            sessionId = null;
+            sessionStorage.removeItem(SESSION_KEY);
+
+            setStatus("New conversation started");
+
+            // Add a welcome-back message
+            addMessage("ai", "Hello! I'm your AI sales assistant. How can I help you today?");
+        });
+    }
+
+    // ── Restore session on load ──────────────────────────────
+    async function restoreSession() {
+        if (!sessionId) return;
+
+        try {
+            const res = await fetch(`/api/session/${sessionId}/history`);
+            if (!res.ok) {
+                // Session expired or not found — start fresh
+                sessionId = null;
+                sessionStorage.removeItem(SESSION_KEY);
+                return;
+            }
+
+            const data = await res.json();
+            if (data.turns && data.turns.length > 0) {
+                // Replay the conversation into the UI
+                for (const turn of data.turns) {
+                    // Skip summary/context turns from pruning
+                    if (turn.content.startsWith("[Earlier conversation context")) {
+                        continue;
+                    }
+                    addMessage(
+                        turn.role === "assistant" ? "ai" : "user",
+                        turn.content
+                    );
+                }
+                setStatus(`Session restored — ${data.turn_count} messages`);
+            }
+        } catch (err) {
+            console.warn("Could not restore session:", err);
+            sessionId = null;
+            sessionStorage.removeItem(SESSION_KEY);
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────
     function escapeHTML(str) {
         const div = document.createElement("div");
@@ -405,6 +472,7 @@
     // Initial state
     setUIState("idle");
     checkBackend();
+    restoreSession();
 
     // Re-check backend every 30s
     setInterval(checkBackend, 30000);

@@ -1,12 +1,15 @@
 """
-AI Voice Sales Agent — Phase 1 Backend
+AI Voice Sales Agent — Phase 2 Backend
 =======================================
 FastAPI server that:
   1. Serves the frontend static files
-  2. Provides POST /api/chat for the voice loop
-  3. Delegates to an LLM service (Gemini / OpenAI / Groq / Ollama / scripted)
+  2. Provides POST /api/chat for the voice loop (now with server-side memory)
+  3. Provides session management endpoints
+  4. Delegates to an LLM service (Gemini / OpenAI / Groq / Ollama / scripted)
+  5. Runs background cleanup for stale sessions
 
 The /chat endpoint doesn't know or care which model is responding.
+Conversation history is now maintained server-side per session.
 
 Run:
     uvicorn backend.main:app --reload --port 8000
@@ -14,6 +17,8 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -36,11 +41,44 @@ from backend.llm import create_llm_service  # noqa: E402
 
 llm_service = create_llm_service()
 
+# ── Conversation Memory (server-side) ────────────────────────
+from backend.memory import ConversationMemory  # noqa: E402
+
+memory = ConversationMemory(
+    max_turns=50,
+    session_ttl_seconds=3600,  # 1 hour
+)
+
+
+# ── Background session cleanup ───────────────────────────────
+
+async def _cleanup_loop():
+    """Periodically remove stale sessions."""
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        memory.cleanup_stale_sessions()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup / shutdown lifecycle."""
+    task = asyncio.create_task(_cleanup_loop())
+    print("[Memory] Background cleanup task started")
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    print("[Memory] Background cleanup task stopped")
+
+
 # ── App ──────────────────────────────────────────────────────
 app = FastAPI(
     title="AI Voice Agent API",
-    description="Phase 1 push-to-talk voice loop",
-    version="1.0.0",
+    description="Phase 2 — real voice agent with conversation memory",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -50,15 +88,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ── Request / Response models ────────────────────────────────
 
 class MessageRequest(BaseModel):
     message: str
+    session_id: Optional[str] = None
+    # Legacy field — still accepted but server-side memory takes priority
     history: Optional[list[dict]] = None
 
 
 class ChatResponse(BaseModel):
     reply: str
+    session_id: str
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+    turn_count: int
+    created_at: float
+    last_active: float
+    age_seconds: float
+
+
+class SessionHistoryResponse(BaseModel):
+    session_id: str
+    turns: list[dict]
+    turn_count: int
 
 
 # ── Routes ───────────────────────────────────────────────────
@@ -75,6 +131,7 @@ async def health_check() -> dict:
     return {
         "status": "healthy",
         "provider": llm_service.provider_name,
+        "active_sessions": memory.active_session_count,
     }
 
 
@@ -82,27 +139,113 @@ async def health_check() -> dict:
 async def chat(request: MessageRequest) -> ChatResponse:
     """
     Main chat endpoint.
-    Accepts the user's message + conversation history,
-    delegates to whatever LLM service is configured,
-    returns the response.
 
+    Now with server-side conversation memory:
+      1. Client sends message + optional session_id
+      2. Server looks up (or creates) the session
+      3. Appends user turn to memory
+      4. Sends full history to the LLM
+      5. Appends AI turn to memory
+      6. Returns reply + session_id
+
+    The client stores session_id for subsequent requests.
     The endpoint doesn't know whether Gemini, GPT, Groq,
     or a scripted fallback generated the reply.
     """
     message = request.message.strip()
     if not message:
-        return ChatResponse(reply="I didn't catch that. Could you try again?")
+        # Still need a valid session_id for the response
+        sid = memory.get_or_create_session(request.session_id)
+        return ChatResponse(
+            reply="I didn't catch that. Could you try again?",
+            session_id=sid,
+        )
 
+    # ── 1. Resolve session ───────────────────────────────────
+    session_id = memory.get_or_create_session(request.session_id)
+
+    # ── 2. Record user turn ──────────────────────────────────
+    memory.add_turn(session_id, "user", message)
+
+    # ── 3. Get full conversation context ─────────────────────
+    conversation = memory.get_history(session_id)
+    # The history includes the current message as the last turn,
+    # so we pass history[:-1] as context and the message separately
+    # (matching the LLM service interface)
+    context = conversation[:-1] if len(conversation) > 1 else None
+
+    # ── 4. Generate response ─────────────────────────────────
     try:
-        reply = await llm_service.generate_response(message, request.history)
+        reply = await llm_service.generate_response(message, context)
     except Exception as e:
         print(f"[LLM Error] {e}")
         # Fall back to scripted if the real provider fails
         from backend.llm.scripted import ScriptedService
         fallback = ScriptedService()
-        reply = await fallback.generate_response(message, request.history)
+        reply = await fallback.generate_response(message, context)
 
-    return ChatResponse(reply=reply)
+    # ── 5. Record AI turn ────────────────────────────────────
+    memory.add_turn(session_id, "assistant", reply)
+
+    print(
+        f"[Chat] Session {session_id}: "
+        f"{memory.get_session_info(session_id)['turn_count']} turns"
+    )
+
+    return ChatResponse(reply=reply, session_id=session_id)
+
+
+# ── Session management endpoints ─────────────────────────────
+
+@app.post("/api/session", tags=["Session"])
+async def create_session() -> dict:
+    """Create a new conversation session."""
+    session_id = memory.create_session()
+    return {"session_id": session_id}
+
+
+@app.get("/api/session/{session_id}", tags=["Session"])
+async def get_session(session_id: str) -> SessionResponse:
+    """Get session metadata."""
+    info = memory.get_session_info(session_id)
+    if info is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Session not found")
+    return SessionResponse(**info)
+
+
+@app.get("/api/session/{session_id}/history", tags=["Session"])
+async def get_session_history(
+    session_id: str,
+    last_n: Optional[int] = None,
+) -> SessionHistoryResponse:
+    """Get conversation history for a session."""
+    if not memory.session_exists(session_id):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    turns = memory.get_history(session_id, last_n=last_n)
+    return SessionHistoryResponse(
+        session_id=session_id,
+        turns=turns,
+        turn_count=len(turns),
+    )
+
+
+@app.delete("/api/session/{session_id}", tags=["Session"])
+async def delete_session(session_id: str) -> dict:
+    """Delete a session and its history."""
+    deleted = memory.delete_session(session_id)
+    return {"deleted": deleted, "session_id": session_id}
+
+
+@app.get("/api/sessions", tags=["Session"])
+async def list_sessions() -> dict:
+    """List all active sessions (debug endpoint)."""
+    return {
+        "count": memory.active_session_count,
+        "sessions": memory.list_sessions(),
+    }
 
 
 # Alias for backward compatibility

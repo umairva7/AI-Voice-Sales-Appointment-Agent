@@ -178,6 +178,54 @@ body {
     text-transform: uppercase;
 }
 
+/* Header actions group */
+.header__actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* New Chat button */
+.new-chat-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: var(--radius-full);
+    font-size: 0.72rem;
+    font-weight: 500;
+    font-family: var(--font);
+    letter-spacing: 0.03em;
+    color: var(--text-secondary);
+    background: var(--bg-glass);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+    transition: all var(--transition-base);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.new-chat-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+    background: var(--accent-surface);
+    box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.new-chat-btn:active {
+    transform: scale(0.96);
+}
+
+.new-chat-btn svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+    transition: opacity var(--transition-fast);
+}
+
+.new-chat-btn:hover svg {
+    opacity: 1;
+}
+
 /* Status badge */
 .status-badge {
     display: flex;
