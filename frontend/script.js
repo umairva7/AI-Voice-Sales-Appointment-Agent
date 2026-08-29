@@ -4,12 +4,14 @@
    Milestones covered:
      1. Browser microphone (Web Speech API)
      2. Speech-to-text → transcript in UI
-     3. POST /api/chat → backend (with session management)
-     4. Display AI response
-     5. Text-to-speech (SpeechSynthesis)
-     6. Server-side conversation memory (via session_id)
-     7. Session persistence across page reloads
-     8. New conversation / clear history controls
+     3. POST /api/chat → backend (HTTP fallback)
+     4. WS /ws/chat → backend (streaming, preferred)
+     5. Display AI response (streaming token-by-token)
+     6. Text-to-speech (SpeechSynthesis)
+     7. Server-side conversation memory (via session_id)
+     8. Session persistence across page reloads
+     9. New conversation / clear history controls
+    10. WebSocket auto-reconnection with HTTP fallback
    ============================================================ */
 
 (function () {
@@ -37,6 +39,12 @@
     // but not browser restarts (intentional: fresh session on new visit)
     const SESSION_KEY = "voice_agent_session_id";
     let sessionId = sessionStorage.getItem(SESSION_KEY) || null;
+
+    // ── WebSocket state ─────────────────────────────────────
+    let ws = null;
+    let wsConnected = false;
+    let wsReconnectTimer = null;
+    const WS_RECONNECT_DELAY = 3000;
 
     // ── Feature detection ────────────────────────────────────
     const SpeechRecognition =
@@ -236,6 +244,69 @@
         if (el) el.remove();
     }
 
+    // ── Streaming message bubble ─────────────────────────────
+    let $streamBubble = null;
+
+    function addStreamingMessage() {
+        const wrapper = document.createElement("div");
+        wrapper.className = "message message--system";
+        wrapper.id = "streaming-message";
+
+        wrapper.innerHTML = `
+            <div class="message__avatar message__avatar--ai">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            </div>
+            <div class="message__content">
+                <div class="message__bubble message__bubble--ai">
+                    <p class="streaming-text"></p><span class="streaming-cursor">▎</span>
+                </div>
+            </div>
+        `;
+
+        $messages.appendChild(wrapper);
+        scrollToBottom();
+        $streamBubble = wrapper;
+        return wrapper;
+    }
+
+    function updateStreamingMessage(text) {
+        if (!$streamBubble) return;
+        const p = $streamBubble.querySelector(".streaming-text");
+        if (p) p.textContent = text;
+        scrollToBottom();
+    }
+
+    function finalizeStreamingMessage(fullText) {
+        if (!$streamBubble) return;
+        const p = $streamBubble.querySelector(".streaming-text");
+        if (p) p.textContent = fullText;
+
+        // Remove the streaming cursor
+        const cursor = $streamBubble.querySelector(".streaming-cursor");
+        if (cursor) cursor.remove();
+
+        // Add timestamp
+        const content = $streamBubble.querySelector(".message__content");
+        if (content) {
+            const timeSpan = document.createElement("span");
+            timeSpan.className = "message__time";
+            timeSpan.textContent = timeNow();
+            content.appendChild(timeSpan);
+        }
+
+        $streamBubble.removeAttribute("id");
+        $streamBubble = null;
+    }
+
+    function removeStreamingMessage() {
+        if ($streamBubble) {
+            $streamBubble.remove();
+            $streamBubble = null;
+        }
+        const el = document.getElementById("streaming-message");
+        if (el) el.remove();
+    }
+
     // ── Core flow ────────────────────────────────────────────
 
     /**
@@ -246,27 +317,37 @@
         removeLiveTranscript();
         addMessage("user", text);
 
-        // Send to backend (server manages history now)
         setUIState("processing");
-        const typingEl = addTypingIndicator();
 
         try {
-            const { reply, session_id } = await sendToBackend(text);
-            removeTypingIndicator();
+            let reply, sid;
 
-            // Persist the session ID for future requests
-            if (session_id) {
-                sessionId = session_id;
-                sessionStorage.setItem(SESSION_KEY, session_id);
+            if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+                // ── WebSocket path (streaming) ──────────────
+                const result = await sendViaWebSocket(text);
+                reply = result.reply;
+                sid = result.session_id;
+            } else {
+                // ── HTTP fallback path ──────────────────────
+                const typingEl = addTypingIndicator();
+                const result = await sendToBackend(text);
+                removeTypingIndicator();
+                addMessage("ai", result.reply);
+                reply = result.reply;
+                sid = result.session_id;
             }
 
-            // Add AI message
-            addMessage("ai", reply);
+            // Persist the session ID for future requests
+            if (sid) {
+                sessionId = sid;
+                sessionStorage.setItem(SESSION_KEY, sid);
+            }
 
             // Speak the response
             await speakText(reply);
         } catch (err) {
             removeTypingIndicator();
+            removeStreamingMessage();
             addMessage("ai", "Sorry, I couldn't process that. Please try again.");
             console.error("Backend error:", err);
         }
@@ -274,8 +355,99 @@
         setUIState("idle");
     }
 
+    // ── WebSocket communication ──────────────────────────────
+
+    function connectWebSocket() {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return; // already connected or connecting
+        }
+
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${location.host}/ws/chat`;
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            wsConnected = true;
+            console.log("[WS] Connected — streaming enabled");
+            updateConnectionBadge("live");
+            if (wsReconnectTimer) {
+                clearTimeout(wsReconnectTimer);
+                wsReconnectTimer = null;
+            }
+        };
+
+        ws.onclose = () => {
+            wsConnected = false;
+            console.log("[WS] Disconnected — falling back to HTTP");
+            updateConnectionBadge("online");
+            // Schedule reconnection
+            if (!wsReconnectTimer) {
+                wsReconnectTimer = setTimeout(() => {
+                    wsReconnectTimer = null;
+                    connectWebSocket();
+                }, WS_RECONNECT_DELAY);
+            }
+        };
+
+        ws.onerror = (e) => {
+            console.warn("[WS] Error:", e);
+            // onclose will fire after this
+        };
+    }
+
     /**
-     * POST /api/chat — now sends session_id instead of full history
+     * Send a message via WebSocket and stream the response.
+     * Returns a Promise that resolves when streaming is complete.
+     */
+    function sendViaWebSocket(message) {
+        return new Promise((resolve, reject) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                reject(new Error("WebSocket not connected"));
+                return;
+            }
+
+            let fullReply = "";
+
+            const handler = (e) => {
+                let data;
+                try {
+                    data = JSON.parse(e.data);
+                } catch {
+                    return;
+                }
+
+                if (data.type === "stream_start") {
+                    addStreamingMessage();
+                } else if (data.type === "token") {
+                    fullReply += data.content;
+                    updateStreamingMessage(fullReply);
+                } else if (data.type === "stream_end") {
+                    ws.removeEventListener("message", handler);
+                    finalizeStreamingMessage(data.full_reply || fullReply);
+                    resolve({
+                        reply: data.full_reply || fullReply,
+                        session_id: data.session_id || null,
+                    });
+                } else if (data.type === "error") {
+                    ws.removeEventListener("message", handler);
+                    removeStreamingMessage();
+                    reject(new Error(data.message || "WebSocket error"));
+                }
+            };
+
+            ws.addEventListener("message", handler);
+
+            ws.send(JSON.stringify({
+                type: "message",
+                message: message,
+                session_id: sessionId,
+            }));
+        });
+    }
+
+    /**
+     * POST /api/chat — HTTP fallback (original Phase 1 path)
      */
     async function sendToBackend(message) {
         const res = await fetch("/api/chat", {
@@ -426,6 +598,25 @@
         }
     }
 
+    // ── Connection badge ─────────────────────────────────────
+    function updateConnectionBadge(state) {
+        const $text = $connBadge.querySelector(".status-badge__text");
+        switch (state) {
+            case "live":
+                $connBadge.className = "status-badge status-badge--live";
+                $text.textContent = "Live";
+                break;
+            case "online":
+                $connBadge.className = "status-badge status-badge--online";
+                $text.textContent = "Online";
+                break;
+            case "offline":
+                $connBadge.className = "status-badge status-badge--offline";
+                $text.textContent = "Offline";
+                break;
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────
     function escapeHTML(str) {
         const div = document.createElement("div");
@@ -452,14 +643,17 @@
         try {
             const res = await fetch("/health");
             if (res.ok) {
-                $connBadge.className = "status-badge status-badge--online";
-                $connBadge.querySelector(".status-badge__text").textContent = "Online";
+                // Don't downgrade from "Live" to "Online" if WS is connected
+                if (!wsConnected) {
+                    updateConnectionBadge("online");
+                }
             } else {
                 throw new Error();
             }
         } catch {
-            $connBadge.className = "status-badge status-badge--offline";
-            $connBadge.querySelector(".status-badge__text").textContent = "Offline";
+            if (!wsConnected) {
+                updateConnectionBadge("offline");
+            }
         }
     }
 
@@ -473,6 +667,7 @@
     setUIState("idle");
     checkBackend();
     restoreSession();
+    connectWebSocket();
 
     // Re-check backend every 30s
     setInterval(checkBackend, 30000);
