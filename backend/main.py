@@ -3,13 +3,15 @@ AI Voice Sales Agent — Phase 2 Backend
 =======================================
 FastAPI server that:
   1. Serves the frontend static files
-  2. Provides POST /api/chat for the voice loop (now with server-side memory)
-  3. Provides session management endpoints
-  4. Delegates to an LLM service (Gemini / OpenAI / Groq / Ollama / scripted)
-  5. Runs background cleanup for stale sessions
+  2. Provides POST /api/chat for the voice loop (with server-side memory)
+  3. Provides WS /ws/chat for streaming responses
+  4. Provides session management endpoints
+  5. Delegates to an LLM service (Gemini / OpenAI / Groq / Ollama / scripted)
+  6. Delegates TTS to a TTS service (browser / edge-tts)
+  7. Runs background cleanup for stale sessions
 
-The /chat endpoint doesn't know or care which model is responding.
-Conversation history is now maintained server-side per session.
+The chat endpoints don't know or care which model is responding.
+Conversation history is maintained server-side per session.
 
 Run:
     uvicorn backend.main:app --reload --port 8000
@@ -18,12 +20,13 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -40,6 +43,11 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 from backend.llm import create_llm_service  # noqa: E402
 
 llm_service = create_llm_service()
+
+# ── TTS Service (created once at startup) ────────────────────
+from backend.tts import create_tts_service  # noqa: E402
+
+tts_service = create_tts_service()
 
 # ── Conversation Memory (server-side) ────────────────────────
 from backend.memory import ConversationMemory  # noqa: E402
@@ -76,8 +84,8 @@ async def lifespan(app: FastAPI):
 # ── App ──────────────────────────────────────────────────────
 app = FastAPI(
     title="AI Voice Agent API",
-    description="Phase 2 — real voice agent with conversation memory",
-    version="2.0.0",
+    description="Phase 2 — voice agent with streaming, memory, and TTS abstraction",
+    version="2.1.0",
     lifespan=lifespan,
 )
 
@@ -130,7 +138,8 @@ async def health_check() -> dict:
     """Health check — shows which LLM provider is active."""
     return {
         "status": "healthy",
-        "provider": llm_service.provider_name,
+        "llm_provider": llm_service.provider_name,
+        "tts_provider": tts_service.provider_name,
         "active_sessions": memory.active_session_count,
     }
 
@@ -252,6 +261,107 @@ async def list_sessions() -> dict:
 @app.post("/api/message", tags=["Chat"], include_in_schema=False)
 async def handle_message(request: MessageRequest) -> ChatResponse:
     return await chat(request)
+
+
+# ── WebSocket streaming endpoint ─────────────────────────────
+
+@app.websocket("/ws/chat")
+async def ws_chat(websocket: WebSocket):
+    """
+    WebSocket endpoint for streaming chat.
+
+    Client sends:
+        {"type": "message", "message": "...", "session_id": "..."}
+
+    Server streams back:
+        {"type": "stream_start"}
+        {"type": "token", "content": "..."}
+        {"type": "stream_end", "full_reply": "...", "session_id": "...", "tts_mode": "browser"}
+    """
+    await websocket.accept()
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            data = json.loads(raw)
+
+            if data.get("type") != "message":
+                await websocket.send_json(
+                    {"type": "error", "message": "Unknown message type"}
+                )
+                continue
+
+            message = data.get("message", "").strip()
+            client_session_id = data.get("session_id")
+
+            if not message:
+                sid = memory.get_or_create_session(client_session_id)
+                await websocket.send_json({
+                    "type": "stream_end",
+                    "full_reply": "I didn't catch that. Could you try again?",
+                    "session_id": sid,
+                    "tts_mode": "browser",
+                })
+                continue
+
+            # 1. Resolve session
+            session_id = memory.get_or_create_session(client_session_id)
+
+            # 2. Record user turn
+            memory.add_turn(session_id, "user", message)
+
+            # 3. Get conversation context
+            conversation = memory.get_history(session_id)
+            context = conversation[:-1] if len(conversation) > 1 else None
+
+            # 4. Stream response
+            await websocket.send_json({"type": "stream_start"})
+
+            full_reply = ""
+            try:
+                async for token in llm_service.stream_response(message, context):
+                    full_reply += token
+                    await websocket.send_json({
+                        "type": "token",
+                        "content": token,
+                    })
+            except Exception as e:
+                print(f"[LLM Stream Error] {e}")
+                # Fall back to scripted if the real provider fails
+                from backend.llm.scripted import ScriptedService
+
+                fallback = ScriptedService()
+                full_reply = await fallback.generate_response(message, context)
+                await websocket.send_json({
+                    "type": "token",
+                    "content": full_reply,
+                })
+
+            # 5. Record AI turn
+            memory.add_turn(session_id, "assistant", full_reply)
+
+            # 6. Send completion
+            tts_mode = "server" if tts_service.is_server_side else "browser"
+            await websocket.send_json({
+                "type": "stream_end",
+                "full_reply": full_reply,
+                "session_id": session_id,
+                "tts_mode": tts_mode,
+            })
+
+            print(
+                f"[WS Chat] Session {session_id}: "
+                f"{memory.get_session_info(session_id)['turn_count']} turns"
+            )
+
+    except WebSocketDisconnect:
+        print("[WS] Client disconnected")
+    except Exception as e:
+        print(f"[WS Error] {e}")
+        try:
+            await websocket.close(code=1011, reason=str(e))
+        except Exception:
+            pass
 
 
 # ── Static files (must be last) ──────────────────────────────

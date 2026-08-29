@@ -691,6 +691,30 @@ body {
     line-height: 1.6;
 }
 
+/* ----- Streaming message ----- */
+.streaming-text {
+    display: inline;
+}
+
+.streaming-cursor {
+    display: inline;
+    color: var(--accent-light);
+    font-weight: 300;
+    animation: blink-cursor 0.7s step-end infinite;
+    margin-left: 1px;
+}
+
+@keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0; }
+}
+
+/* Live (WebSocket) status badge */
+.status-badge--live .status-badge__dot {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+}
+
 /* ----- Responsive ----- */
 @media (max-width: 480px) {
     #app {
