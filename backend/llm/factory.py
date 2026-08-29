@@ -31,7 +31,7 @@ def create_llm_service() -> LLMService:
     if gemini_key:
         from backend.llm.gemini import GeminiService
 
-        model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+        model = os.getenv("LLM_MODEL", "gemini-flash-latest")
         print(f"[LLM] Using Gemini provider — model: {model}")
         return GeminiService(api_key=gemini_key, model=model)
 
