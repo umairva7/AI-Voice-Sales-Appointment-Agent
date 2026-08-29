@@ -10,6 +10,7 @@ generating the response.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
 
 
 class LLMService(ABC):
@@ -55,3 +56,21 @@ class LLMService(ABC):
             The model's text response.
         """
         ...
+
+    async def stream_response(
+        self,
+        message: str,
+        conversation: list[dict] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream an AI response token-by-token.
+
+        Default implementation: calls generate_response() and yields the
+        full text as a single chunk.  Providers that support native streaming
+        (e.g. Gemini) should override this for real token-level streaming.
+
+        Yields:
+            Text chunks (tokens or partial sentences).
+        """
+        full = await self.generate_response(message, conversation)
+        yield full
